@@ -1,0 +1,79 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>蔵書スキャナー 改良版</title><script src="https://cdn.tailwindcss.com"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script><style>#scanner video,#scanner canvas{width:100%;height:100%;object-fit:cover}#scanner canvas{position:absolute;inset:0}#scanner{position:relative;overflow:hidden}</style></head><body class="bg-slate-100 text-slate-800 min-h-screen"><main class="max-w-4xl mx-auto p-4 sm:p-8"><header class="flex justify-between items-center mb-6"><div><p class="text-indigo-600 text-xs font-bold tracking-widest">MY BOOKSHELF</p><h1 class="text-3xl font-black">蔵書スキャナー</h1><p class="text-slate-500 text-sm mt-1">バーコードでかんたん蔵書管理</p></div><div class="bg-white rounded-xl shadow-sm px-5 py-3 text-center"><div class="text-xs text-slate-500">登録冊数</div><div id="count" class="text-2xl font-bold text-indigo-600">0</div></div></header><section class="bg-white rounded-2xl shadow-sm p-5 mb-5"><div class="flex justify-between items-center mb-3"><h2 class="font-bold">バーコード読み取り</h2><span id="cameraStatus" class="text-xs bg-slate-100 rounded-full px-3 py-1">停止中</span></div><div class="flex flex-col md:flex-row gap-4"><div id="scanner" class="w-full md:w-2/3 h-44 bg-slate-900 rounded-xl flex items-center justify-center"><span id="placeholder" class="text-slate-400 text-sm">カメラ映像を表示</span></div><div class="flex-1 flex flex-col gap-2"><button id="start" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl p-3">カメラを起動</button><button id="stop" disabled class="bg-slate-200 text-slate-700 rounded-xl p-3 disabled:opacity-40">カメラを停止</button><p class="text-xs text-slate-400">カメラにはHTTPSまたはlocalhostが必要です。</p></div></div><form id="isbnForm" class="mt-5 flex gap-2"><input id="isbnInput" inputmode="numeric" autocomplete="off" placeholder="ISBNを手入力（例：9784798189765）" class="border border-slate-200 rounded-xl px-3 py-3 w-full min-w-0 focus:outline-none focus:ring-2 focus:ring-indigo-300" maxlength="20" aria-label="ISBNコード"><button id="search" type="submit" class="bg-slate-900 text-white rounded-xl px-5 font-semibold whitespace-nowrap">検索・登録</button></form><p id="lastScan" class="text-xs text-slate-500 mt-3">最後に読み取ったコード：なし</p><p id="message" role="status" aria-live="polite" class="text-sm mt-2 text-slate-600">カメラまたはISBN手入力で登録できます。</p><div id="manual" class="hidden mt-4 border-t pt-4"><p class="font-semibold text-sm mb-2">書籍情報が取得できない場合は手動登録</p><form id="manualForm" class="grid gap-2 sm:grid-cols-2"><input id="manualTitle" class="border rounded-lg p-3" placeholder="書籍タイトル" required><input id="manualAuthor" class="border rounded-lg p-3" placeholder="著者名（不明でも可）"><button class="sm:col-span-2 bg-indigo-600 text-white p-3 rounded-xl font-semibold" type="submit">この内容で登録</button></form></div></section><section class="bg-white rounded-2xl shadow-sm p-5"><div class="flex justify-between items-center mb-4"><div><h2 class="font-bold">登録した本</h2><p class="text-slate-500 text-xs">新しい登録順に表示</p></div><div class="flex flex-wrap items-center justify-end gap-2"><button id="exportCsv" type="button" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-lg px-3 py-2">エクスポート</button><button id="importCsv" type="button" class="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-lg px-3 py-2">インポート</button><input id="importFile" type="file" accept=".csv,text/csv" class="hidden" aria-label="インポートするCSVファイル"><button id="clear" class="text-rose-600 text-sm font-semibold px-2 py-2">すべて削除</button></div></div><div id="list" class="space-y-3"></div><div id="empty" class="border-2 border-dashed border-slate-100 rounded-xl text-center py-12"><div class="text-3xl">📚</div><p class="font-semibold mt-2">まだ本が登録されていません</p><p class="text-slate-500 text-sm">ISBNをスキャンするとここに表示されます</p></div></section><footer class="text-center text-xs text-slate-400 mt-5">登録内容はこのブラウザのローカルストレージに保存されます。</footer></main><script>
+(()=>{'use strict';const $=id=>document.getElementById(id),KEY='my-bookshelf-v1';let books=[],running=false,starting=false,busy=false,pendingISBN='',recentCode='',recentAt=0,scanSamples=[];try{const b=JSON.parse(localStorage.getItem(KEY)||'[]');if(Array.isArray(b))books=b}catch(e){console.warn('保存データ読み込み失敗',e)}
+function msg(s,bad=false){$('message').textContent=s;$('message').className='text-sm mt-2 '+(bad?'text-rose-600':'text-slate-600')}
+function escape(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(books));return true}catch(e){msg('保存に失敗しました。保存容量やブラウザ設定を確認してください。',true);return false}}
+function render(){$('count').textContent=books.length;$('empty').classList.toggle('hidden',books.length>0);$('list').innerHTML=books.map(b=>`<article class="flex items-start gap-3 bg-slate-50 border border-slate-100 p-4 rounded-xl"><div class="text-2xl">📖</div><div class="flex-1 min-w-0"><h3 class="font-bold break-words">${escape(b.title)}</h3><p class="text-sm text-slate-600 mt-1">${escape(b.authors||'著者情報なし')}</p><p class="text-xs text-slate-500 mt-2">ISBN ${escape(b.isbn)}</p><p class="text-xs text-slate-400 mt-1">${escape(b.registeredAt||'')}</p></div><button class="delete text-rose-600 text-sm font-semibold px-2 py-1" data-isbn="${escape(b.isbn)}">削除</button></article>`).join('')}
+function validISBN(s){s=String(s||'').replace(/[\s-]/g,'').toUpperCase();if(/^\d{13}$/.test(s)&&/^97[89]/.test(s)){let sum=0;for(let i=0;i<12;i++)sum+=Number(s[i])*(i%2?3:1);return (10-sum%10)%10===Number(s[12])?s:null}if(/^\d{9}[\dX]$/.test(s)){let sum=0;for(let i=0;i<10;i++)sum+=(10-i)*(s[i]==='X'?10:Number(s[i]));return sum%11===0?s:null}return null}
+function known(isbn){return books.some(b=>b.isbn===isbn)}
+async function json(url){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),8500);try{const r=await fetch(url,{signal:controller.signal});if(!r.ok)throw Error('HTTP '+r.status);return await r.json()}finally{clearTimeout(timer)}}
+async function lookup(isbn){const failures=[];try{const d=await json('https://www.googleapis.com/books/v1/volumes?q='+encodeURIComponent('isbn:'+isbn)+'&maxResults=10');const item=(d.items||[]).find(x=>(x.volumeInfo?.industryIdentifiers||[]).some(y=>y.identifier===isbn))||d.items?.[0];if(item?.volumeInfo?.title){const v=item.volumeInfo;return {title:[v.title,v.subtitle].filter(Boolean).join(' — '),authors:(v.authors||[]).join('、')||'著者情報なし'}}failures.push('Google Books: 該当なし')}catch(e){failures.push('Google Books: '+e.message)}try{const d=await json('https://openlibrary.org/api/books?bibkeys='+encodeURIComponent('ISBN:'+isbn)+'&format=json&jscmd=data');const v=d['ISBN:'+isbn];if(v?.title)return {title:v.title,authors:(v.authors||[]).map(a=>a.name).filter(Boolean).join('、')||'著者情報なし'};failures.push('Open Library: 該当なし')}catch(e){failures.push('Open Library: '+e.message)}if(isbn==='9784798189765'){return {title:'WebエンジニアのためのChatGPT Webアプリ開発術 効率的なプロンプトで開発力アップ！',authors:'白辺 陽'}}console.warn('書誌検索結果',failures);throw Error(failures.join(' / '))}
+function add(isbn,info){if(known(isbn)){msg('このISBNは登録済みです。');return}books.unshift({isbn,title:info.title,authors:info.authors||'著者情報なし',registeredAt:new Date().toLocaleString('ja-JP')});save();render();$('manual').classList.add('hidden');msg('「'+info.title+'」を登録しました。')}
+async function register(raw){const isbn=validISBN(raw);$('lastScan').textContent='最後に読み取ったコード：'+String(raw);if(!isbn){msg('ISBNの形式またはチェックディジットが正しくありません：'+raw,true);return}if(known(isbn)){msg('ISBN '+isbn+' は登録済みです。');return}if(busy)return;busy=true;pendingISBN=isbn;$('search').disabled=true;$('manual').classList.add('hidden');msg('ISBN '+isbn+' の書籍情報を検索中…');try{const info=await lookup(isbn);add(isbn,info)}catch(e){console.error('書誌検索エラー',e);$('manual').classList.remove('hidden');msg('ISBN '+isbn+' の書誌情報を取得できませんでした。詳細：'+e.message+'。下の欄から手動登録できます。',true)}finally{busy=false;$('search').disabled=false}}
+function cameraUI(on){running=on;$('start').disabled=on||starting;$('stop').disabled=!on;$('cameraStatus').textContent=on?'起動中':'停止中';$('placeholder').classList.toggle('hidden',on)}
+function stop(){if(window.Quagga&&(running||starting)){try{Quagga.stop()}catch(e){console.warn(e)}}starting=false;cameraUI(false);msg('カメラを停止しました。')}
+function start(){if(!window.Quagga){msg('Quagga.jsを読み込めませんでした。インターネット接続を確認してください。',true);return}if(!window.isSecureContext){msg('カメラはHTTPSまたはlocalhostで開いてください。ISBN手入力は利用できます。',true);return}if(running||starting)return;starting=true;$('start').disabled=true;msg('カメラを準備しています…');Quagga.init({inputStream:{name:'Live',type:'LiveStream',target:$('scanner'),constraints:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}},area:{top:'15%',right:'5%',left:'5%',bottom:'15%'}},locator:{patchSize:'medium',halfSample:true},numOfWorkers:2,frequency:10,decoder:{readers:['ean_reader']},locate:true},e=>{starting=false;if(e){console.error(e);cameraUI(false);msg('カメラ起動失敗：ブラウザの権限・他アプリのカメラ使用・HTTPSを確認してください。',true);return}try{Quagga.start();cameraUI(true);msg('ISBNバーコードをカメラに向けてください。')}catch(err){cameraUI(false);msg('カメラ開始に失敗：'+err.message,true)}})}
+if(window.Quagga){Quagga.onDetected(result=>{if(!running||busy)return;const raw=result?.codeResult?.code;if(!raw)return;const isbn=validISBN(raw);if(!isbn)return;const now=Date.now();scanSamples=scanSamples.filter(x=>now-x.t<1800);scanSamples.push({isbn,t:now});if(scanSamples.filter(x=>x.isbn===isbn).length<2)return;if(isbn===recentCode&&now-recentAt<4500)return;recentCode=isbn;recentAt=now;scanSamples=[];console.log('認識したISBN',isbn);register(isbn)})}
+// CSVはUTF-8 BOM付きで出力し、Excelでも日本語が文字化けしにくい形式にする
+const csvHeaders=['ISBN','書籍タイトル','著者名','登録日時'];
+function csvCell(value){const text=String(value??'');return '"'+text.replace(/"/g,'""')+'"'}
+function exportCsv(){
+ if(!books.length){msg('エクスポートする書籍がありません。',true);return}
+ const rows=[csvHeaders,...books.map(b=>[b.isbn,b.title,b.authors||'',b.registeredAt||''])];
+ const csv='\uFEFF'+rows.map(row=>row.map(csvCell).join(',')).join('\r\n')+'\r\n';
+ const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+ const url=URL.createObjectURL(blob);const a=document.createElement('a');
+ a.href=url;a.download='books_'+new Date().toLocaleDateString('sv-SE')+'.csv';
+ document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+ msg(books.length+'冊の書籍情報をCSVにエクスポートしました。');
+}
+// ダブルクォート・カンマ・セル内改行を含むCSVにも対応
+function parseCsv(input){
+ const text=String(input).replace(/^\uFEFF/,'');let rows=[],row=[],cell='',quoted=false;
+ for(let i=0;i<text.length;i++){
+  const c=text[i];
+  if(quoted){if(c==='"'&&text[i+1]==='"'){cell+='"';i++}else if(c==='"'){quoted=false}else{cell+=c}}
+  else if(c==='"'){if(cell!=='')throw Error('CSVの引用符の位置が正しくありません。');quoted=true}
+  else if(c===','){row.push(cell);cell=''}
+  else if(c==='\n'||c==='\r'){if(c==='\r'&&text[i+1]==='\n')i++;row.push(cell);if(row.some(v=>v.trim()!==''))rows.push(row);row=[];cell=''}
+  else{cell+=c}
+ }
+ if(quoted)throw Error('CSVの引用符が閉じられていません。');
+ row.push(cell);if(row.some(v=>v.trim()!==''))rows.push(row);
+ return rows;
+}
+async function importCsv(file){
+ if(!file)return;
+ if(file.size>5*1024*1024){msg('CSVファイルが大きすぎます（上限5MB）。',true);return}
+ try{
+  const rows=parseCsv(await file.text());
+  if(!rows.length)throw Error('CSVファイルが空です。');
+  const header=rows[0].map(v=>v.trim().toLowerCase());
+  const findCol=(names)=>header.findIndex(v=>names.includes(v));
+  const isbnCol=findCol(['isbn','isbnコード']);
+  const titleCol=findCol(['書籍タイトル','タイトル','title']);
+  const authorCol=findCol(['著者名','著者','authors','author']);
+  const dateCol=findCol(['登録日時','登録日','registeredat']);
+  if(isbnCol<0||titleCol<0||authorCol<0)throw Error('ヘッダーにISBN、書籍タイトル、著者名が必要です。');
+  let added=0,duplicates=0,invalid=0;
+  const existing=new Set(books.map(b=>b.isbn));const incoming=[];
+  for(const row of rows.slice(1)){
+   const isbn=validISBN((row[isbnCol]||'').trim());
+   const title=(row[titleCol]||'').trim();
+   if(!isbn||!title){invalid++;continue}
+   if(existing.has(isbn)){duplicates++;continue}
+   existing.add(isbn);added++;
+   incoming.push({isbn,title,authors:(row[authorCol]||'').trim()||'著者情報なし',registeredAt:dateCol>=0?(row[dateCol]||'').trim():''});
+  }
+  if(!added){msg('追加された書籍はありません。重複 '+duplicates+'件、無効 '+invalid+'件。',invalid>0);return}
+  // CSVの並び順を保ちつつ、インポートした書籍を一覧の先頭へ追加
+  const previous=books;books=[...incoming,...books];
+  if(!save()){books=previous;render();return}
+  render();msg(added+'冊をインポートしました。重複 '+duplicates+'件、無効 '+invalid+'件。');
+ }catch(error){console.error('CSVインポート失敗',error);msg('CSVをインポートできません：'+error.message,true)}
+}
+$('exportCsv').onclick=exportCsv;
+$('importCsv').onclick=()=>$('importFile').click();
+$('importFile').addEventListener('change',async e=>{const file=e.target.files?.[0];await importCsv(file);e.target.value=''});
+$('start').onclick=start;$('stop').onclick=stop;$('isbnForm').onsubmit=e=>{e.preventDefault();register($('isbnInput').value.trim())};$('manualForm').onsubmit=e=>{e.preventDefault();if(!pendingISBN||!validISBN(pendingISBN))return;const title=$('manualTitle').value.trim(),authors=$('manualAuthor').value.trim();if(title)add(pendingISBN,{title,authors});$('manualForm').reset()};$('list').onclick=e=>{const btn=e.target.closest('.delete');if(!btn)return;const isbn=btn.dataset.isbn,b=books.find(x=>x.isbn===isbn);if(b&&confirm('「'+b.title+'」を削除しますか？')){books=books.filter(x=>x.isbn!==isbn);save();render();msg('削除しました。')}};$('clear').onclick=()=>{if(books.length&&confirm('登録した本をすべて削除しますか？')){books=[];save();render();msg('すべて削除しました。')}};window.addEventListener('beforeunload',()=>{if(running&&window.Quagga)Quagga.stop()});render()})();
+</script></body></html>
